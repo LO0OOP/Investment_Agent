@@ -1,0 +1,7 @@
+# 应用级配置
+
+app:
+  name: investment-agent
+  env: ${APP_ENV} #(dev/test/prod)
+  log_level: DEBUG
+

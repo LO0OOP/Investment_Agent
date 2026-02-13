@@ -1,0 +1,5 @@
+# 行情 & 交易配置
+
+exchange:
+  name: binance # 交易所
+  use_mock: true # 是否模拟盘

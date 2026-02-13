@@ -1,0 +1,5 @@
+# 风险控制
+
+risk:
+  max_position_ratio: 0.3
+  max_single_order: 2000
