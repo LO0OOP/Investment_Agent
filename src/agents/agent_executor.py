@@ -8,7 +8,9 @@
 from __future__ import annotations
 
 import os
+import asyncio
 from typing import Any, Dict, Optional
+
 
 from langchain.agents import AgentExecutor, create_openai_tools_agent
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
@@ -33,8 +35,10 @@ def _build_llm() -> ChatOpenAI:
     provider = str(llm_cfg.get("provider", "openai")).lower()
     model_name = llm_cfg.get("model") or os.getenv("LLM_MODEL", "gpt-4o-mini")
     temperature = float(llm_cfg.get("temperature", os.getenv("LLM_TEMPERATURE", 0.3)))
+    streaming = bool(llm_cfg.get("streaming", False))
 
     base_url = (
+
         llm_cfg.get("base_url")
         or os.getenv("BAILIAN_BASE_URL")
         or os.getenv("OPENAI_API_BASE")
@@ -45,11 +49,12 @@ def _build_llm() -> ChatOpenAI:
         raise RuntimeError("未找到大模型 API Key，请在 .env 中配置 BAILIAN_API_KEY 或 OPENAI_API_KEY")
 
     logger.info(
-        "初始化 LLM: provider=%s model=%s temperature=%s base_url=%s",
+        "初始化 LLM: provider=%s model=%s temperature=%s base_url=%s streaming=%s",
         provider,
         model_name,
         temperature,
         base_url,
+        streaming,
     )
 
     if provider in {"openai", "openai_compatible", "bailian", "dashscope"}:
@@ -58,7 +63,9 @@ def _build_llm() -> ChatOpenAI:
             temperature=temperature,
             base_url=base_url,
             api_key=api_key,
+            streaming=streaming,
         )
+
 
     raise ValueError(f"当前示例暂不支持 provider={provider}")
 
@@ -72,17 +79,7 @@ def _build_tools_agent(
     不再显式做意图分类，而是通过系统提示 + 工具 schema，
     让大模型自行决定是否以及如何调用工具。
     """
-    system_prompt = get_system_prompt() + (
-        "\n你可以使用提供的工具(list_strategies, run_backtest)来获取结构化数据。"
-        "\n- 当用户询问支持的策略或策略参数时，优先调用 list_strategies；"
-        "\n- 当用户希望对某个标的/周期/区间进行回测时，优先调用 run_backtest；"
-        "\n- 如果问题与策略/回测无关，可以直接用自然语言回答，并说明当前系统主要聚焦于策略说明和回测分析。"
-        "\n在使用工具时，请遵循以下流程："
-        "\n1. 先用简短的思考确定是否需要调用工具；"
-        "\n2. 如需要，规划好要调用的工具及参数；"
-        "\n3. 调用工具并根据返回的结构化数据进行分析；"
-        "\n4. 用简体中文给出清晰的结论和解释，提醒用户回测不构成投资建议。"
-    )
+    system_prompt = get_system_prompt()
     if history_text:
         system_prompt += (
             "\n以下是本轮对话之前的历史记录，仅供你理解上下文，请综合考虑：\n"
@@ -128,7 +125,42 @@ def run_query(user_input: str, memory: InMemorySessionMemory | None = None) -> D
     executor = _build_tools_agent(llm, history_text)
 
     # 交给 AgentExecutor 执行，本身会根据工具 schema 和用户输入自行决定是否调用工具
-    result = executor.invoke({"input": user_input})
+    streaming_enabled = bool(settings.llm.get("streaming", False))
+
+    if streaming_enabled:
+        # 使用流式事件接口打印输出，同时在最后拿到完整结果
+        async def _run_with_streaming() -> Dict[str, Any]:
+            final: Dict[str, Any] | None = None
+            async for event in executor.astream_events({"input": user_input}, version="v1"):
+                kind = event.get("event")
+                data = event.get("data") or {}
+
+                # 打印模型生成的 token（包括中间思考和最终回答）
+                if kind == "on_chat_model_stream":
+                    chunk = data.get("chunk")
+                    if chunk is not None:
+                        # 对于 OpenAI 兼容模型，content 通常是字符串或列表，这里做一次统一处理
+                        content = getattr(chunk, "content", "")
+                        if isinstance(content, list):
+                            text = "".join(getattr(p, "text", "") or getattr(p, "content", "") for p in content)
+                        else:
+                            text = str(content or "")
+                        if text:
+                            print(text, end="", flush=True)
+
+                # 链路结束事件，一般包含最终 output
+                if kind == "on_chain_end":
+                    output = data.get("output")
+                    if isinstance(output, dict):
+                        final = output
+                    # 打印一个换行，结束当前回答
+                    print()
+
+            return final or {}
+
+        result: Dict[str, Any] = asyncio.run(_run_with_streaming())
+    else:
+        result = executor.invoke({"input": user_input})
 
     # 从结果中提取最终回复并写入内存
     output_text = str(result.get("output", ""))
@@ -136,6 +168,7 @@ def run_query(user_input: str, memory: InMemorySessionMemory | None = None) -> D
     session_memory.add("assistant", output_text)
 
     return result
+
 
 
 def create_agent_executor() -> AgentExecutor:
@@ -160,6 +193,9 @@ if __name__ == "__main__":
             if not question.strip():
                 continue
             resp = run_query(question)
-            print("Agent:", resp.get("output"))
+            # 如果启用了流式输出，内容已经在流式过程中打印过，这里只在非流式模式下再打印一次完整结果
+            if not bool(settings.llm.get("streaming", False)):
+                print("Agent:", resp.get("output"))
+
     except KeyboardInterrupt:
         print("\n退出。")

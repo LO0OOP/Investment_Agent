@@ -4,5 +4,7 @@ llm:
   provider: openai_compatible   # 使用阿里云百炼 OpenAI 兼容模式
   model: deepseek-v3.2            # 在百炼控制台选择的模型 ID，例如 qwen-plus / qwen3-coder-plus
   temperature: 0.5
+  streaming: false               # 是否开启大模型流式输出（true/false）
   # 可选：显式配置 base_url；也可以通过环境变量 BAILIAN_BASE_URL / OPENAI_API_BASE 提供
   base_url: ${BAILIAN_BASE_URL}
+
