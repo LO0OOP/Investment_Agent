@@ -4,4 +4,4 @@ __pycache__/
 venv/
 .env.local
 .idea/
-invesAgentVenv
+invesAgentVenv/
