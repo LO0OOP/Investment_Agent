@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>Investment Agent 测试页面</title>
+</head>
+<body>
+  <h1>Investment Agent 流式测试</h1>
+
+  <div>
+    <label>Session ID（可选，多轮对话用同一个）:</label>
+    <input id="sessionId" type="text" value="demo-session" style="width: 200px;" />
+  </div>
+
+  <div style="margin-top: 10px;">
+    <label>输入问题:</label><br />
+    <textarea id="message" rows="4" cols="80">当前支持哪些交易策略</textarea>
+  </div>
+
+  <div style="margin-top: 10px;">
+    <label>
+      <input type="checkbox" id="streaming" checked /> 使用流式输出
+    </label>
+  </div>
+
+  <div style="margin-top: 10px;">
+    <button onclick="onSend()">发送</button>
+  </div>
+
+  <pre id="output" style="margin-top: 20px; white-space: pre-wrap; border: 1px solid #ccc; padding: 10px;"></pre>
+
+  <!-- 引入你之前写的 test_client.js -->
+  <script src="src/api/test_client.js"></script>
+
+  <script>
+    async function onSend() {
+      const msg = document.getElementById("message").value;
+      const sid = document.getElementById("sessionId").value || "demo-session";
+      const outputEl = document.getElementById("output");
+      const useStreaming = document.getElementById("streaming").checked;
+
+      if (useStreaming) {
+        outputEl.textContent = "开始流式接收...\n";
+
+        await startStream(msg, sid, {
+          onToken: (text, fullText) => {
+            // 每个新 token 到来时，直接用累积文本刷新，不额外换行
+            outputEl.textContent = fullText;
+          },
+          onDone: (result, fullText) => {
+            // 可选地在末尾追加一些调试信息
+            outputEl.textContent = fullText || (result && result.output) || "";
+          },
+          onError: (evt) => {
+            outputEl.textContent += "\n[错误] " + (evt.message || "未知错误");
+          },
+        });
+      } else {
+        // 非流式模式：直接调用 /api/chat 拿完整结果
+        outputEl.textContent = "请求中...";
+        try {
+          const resp = await fetch("http://127.0.0.1:8000/api/chat", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ message: msg, session_id: sid }),
+          });
+          if (!resp.ok) {
+            outputEl.textContent = "请求失败：" + resp.status + " " + resp.statusText;
+            return;
+          }
+          const data = await resp.json();
+          outputEl.textContent = data.output || JSON.stringify(data, null, 2);
+        } catch (e) {
+          outputEl.textContent = "请求异常：" + e;
+        }
+      }
+    }
+  </script>
+
+</body>
+</html>
