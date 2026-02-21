@@ -1,7 +1,7 @@
 """news_worker.run
 
 新闻 Worker 启动入口：
-- 从本地配置读取拉取频率和股票代码；
+- 从本地配置读取拉取频率和**股票关键词**（推荐股票中文名，例如 "浦发银行"）；
 - 周期性地拉取新闻、清洗去重，并写入数据库。
 
 使用方式（项目根目录）：
@@ -10,6 +10,7 @@
 
 后续可以将本模块配置为独立进程或服务长期运行。
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -42,12 +43,13 @@ def load_config() -> Dict[str, Any]:
 def run_once(config: Dict[str, Any]) -> None:
   symbols: List[str] = list(config.get("symbols", []))
   if not symbols:
-    logger.warning("[run_once] 配置中未找到任何股票代码，跳过本轮")
+    logger.warning("[run_once] 配置中未找到任何股票关键词（名称/代码），跳过本轮")
     return
 
   limit = int(config.get("per_symbol_limit", 50))
 
-  logger.info("[run_once] 开始本轮新闻拉取: symbols=%s, limit=%s", symbols, limit)
+  logger.info("[run_once] 开始本轮新闻拉取: keywords=%s, limit=%s", symbols, limit)
+
 
   # 1. 拉取原始新闻
   raw_items = collect_news_for_symbols(symbols, limit_per_symbol=limit)

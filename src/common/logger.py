@@ -1,13 +1,14 @@
 import logging
 import sys
 from typing import Optional
+from src.common.config import settings
 
 
 _LOGGER_CONFIGURED = False
 
 
 def setup_logging( 
-    level: str = "INFO",
+    level: str = settings.app["log_level"],
     fmt: Optional[str] = None,
 ) -> None:
     """
