@@ -9,7 +9,8 @@ from typing import List
 from langchain_core.tools import BaseTool
 
 from src.agents.intent import Intent
-from src.tools import backtest_tool, strategy_info_tool
+from src.tools import backtest_tool, strategy_info_tool, news_query_tool
+
 
 
 def get_tools_for_intent(intent: Intent) -> List[BaseTool]:

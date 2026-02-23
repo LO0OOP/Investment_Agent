@@ -18,10 +18,12 @@ from langchain_openai import ChatOpenAI
 
 from src.common.config import settings
 from src.common.logger import get_logger, setup_logging
-from src.tools import backtest_tool, strategy_info_tool
+from src.tools.registry import ALL_TOOLS
+
 
 from .memory import InMemorySessionMemory
 from .prompts import get_system_prompt
+
 
 
 logger = get_logger(__name__)
@@ -86,9 +88,11 @@ def _build_tools_agent(
             f"{history_text}\n"
         )
 
-    tools = [strategy_info_tool, backtest_tool]
+    # 自动注册的所有工具；新增 Tool 只需在 src.tools 下定义，无需修改此处
+    tools = list(ALL_TOOLS.values())
 
     # ReAct + Tools 模式的 Prompt：System 约束 + 用户输入 + agent_scratchpad
+
     prompt = ChatPromptTemplate.from_messages(
         [
             ("system", system_prompt),
