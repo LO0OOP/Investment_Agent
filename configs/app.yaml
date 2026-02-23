@@ -3,5 +3,5 @@
 app:
   name: investment-agent
   env: ${APP_ENV} #(dev/test/prod)
-  log_level: DEBUG
+  log_level: INFO
 
