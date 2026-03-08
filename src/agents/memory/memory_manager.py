@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 from typing import Any, Dict, List, Optional, Tuple
 
 from langchain_openai import ChatOpenAI
@@ -23,7 +24,8 @@ from .user_profile import load_profile, save_profile, format_profile_for_prompt
 logger = get_logger(__name__)
 
 # 每隔多少轮触发一次记忆更新
-UPDATE_INTERVAL = 10
+UPDATE_INTERVAL = 5
+
 
 
 class MemoryManager:
@@ -57,8 +59,15 @@ class MemoryManager:
         # 自上次更新以来积累的消息数量（每条消息算 1 条）
         self._messages_since_update: int = 0
 
-        # 懒加载 LLM（只在实际需要更新时才创建）
-        self._llm: Optional[ChatOpenAI] = None
+        # 懒加载 LLM（只在实际需要更新时才创建），摘要与画像各自可独立配置
+        self._summary_llm: Optional[ChatOpenAI] = None
+        self._profile_llm: Optional[ChatOpenAI] = None
+
+        # 后台更新线程控制
+        self._update_thread: Optional[threading.Thread] = None
+        self._update_lock = threading.Lock()
+        self._update_in_progress: bool = False
+
 
     # ------------------------------------------------------------------
     # 公开读接口
@@ -94,62 +103,89 @@ class MemoryManager:
     # ------------------------------------------------------------------
 
     def maybe_update_memory(self) -> None:
-        """当积累消息数达到阈值时，触发摘要和用户画像的 LLM 更新。
+        """当积累消息数达到阈值时，触发摘要和用户画像的更新。
 
-        每对 user+assistant 消息算 2 条，UPDATE_INTERVAL=10 意味着约 5 轮对话触发一次。
-        实际上我们按消息条数统计，达到 update_interval*2 时触发。
+        - 改为后台线程执行，避免阻塞用户输入。
+        - 若已有后台更新在运行，则本轮跳过，等待下一轮累积。
         """
         threshold = self.update_interval * 2  # 10 轮 = 20 条消息
         if self._messages_since_update < threshold:
             return
 
-        logger.info(
-            "已积累 %d 条消息，开始更新长期记忆…", self._messages_since_update
-        )
-        recent_text = self._format_recent_messages()
+        # 如果后台正在跑更新，直接跳过，等待下一轮触发
+        if self._update_in_progress:
+            logger.info("已有长期记忆更新正在进行，本轮跳过。")
+            return
 
-        try:
-            self._update_summary(recent_text)
-            self._update_profile(recent_text)
-            # 重置计数器
-            self._messages_since_update = 0
-            logger.info("长期记忆更新完成。")
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.warning("长期记忆更新失败：%s", exc)
+        recent_text = self._format_recent_messages()
+        # 触发后立即重置计数，避免重复触发
+        self._messages_since_update = 0
+
+        def _run():
+            with self._update_lock:
+                self._update_in_progress = True
+            try:
+                logger.info("后台更新长期记忆开始…")
+                self._update_summary(recent_text)
+                self._update_profile(recent_text)
+                logger.info("后台更新长期记忆完成。")
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.warning("长期记忆更新失败：%s", exc)
+            finally:
+                self._update_in_progress = False
+
+        # 后台线程，避免阻塞主流程
+        self._update_thread = threading.Thread(target=_run, daemon=True)
+        self._update_thread.start()
+
 
     # ------------------------------------------------------------------
     # 内部更新逻辑
     # ------------------------------------------------------------------
 
-    def _get_llm(self) -> ChatOpenAI:
-        """懒加载 LLM 实例（用于记忆更新，不受主 Agent streaming 设置影响）。"""
-        if self._llm is None:
-            llm_cfg = settings.llm
-            provider = str(llm_cfg.get("provider", "openai")).lower()
-            model_name = llm_cfg.get("model") or os.getenv("LLM_MODEL", "gpt-4o-mini")
+    # ------------------------------------------------------------------
+    # LLM 构建（摘要/画像可使用独立模型配置）
+    # ------------------------------------------------------------------
 
-            base_url = (
-                llm_cfg.get("base_url")
-                or os.getenv("BAILIAN_BASE_URL")
-                or os.getenv("OPENAI_API_BASE")
-                or None
+    @staticmethod
+    def _build_llm_from_cfg(cfg: Dict[str, Any], default_temperature: float = 0.3) -> ChatOpenAI:
+        provider = str(cfg.get("provider") or settings.llm.get("provider", "openai")).lower()
+        model_name = cfg.get("model") or settings.llm.get("model") or os.getenv("LLM_MODEL", "gpt-4o-mini")
+        temperature = float(cfg.get("temperature", default_temperature))
+
+        base_url = (
+            cfg.get("base_url")
+            or settings.llm.get("base_url")
+            or os.getenv("BAILIAN_BASE_URL")
+            or os.getenv("OPENAI_API_BASE")
+            or None
+        )
+        api_key = os.getenv("BAILIAN_API_KEY") or os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise RuntimeError("未找到大模型 API Key")
+
+        if provider in {"openai", "openai_compatible", "bailian", "dashscope"}:
+            return ChatOpenAI(
+                model=model_name,
+                temperature=temperature,
+                base_url=base_url,
+                api_key=api_key,
+                streaming=False,  # 记忆更新不需要流式
             )
-            api_key = os.getenv("BAILIAN_API_KEY") or os.getenv("OPENAI_API_KEY")
-            if not api_key:
-                raise RuntimeError("未找到大模型 API Key")
+        raise ValueError(f"不支持的 provider: {provider}")
 
-            if provider in {"openai", "openai_compatible", "bailian", "dashscope"}:
-                self._llm = ChatOpenAI(
-                    model=model_name,
-                    temperature=0.3,  # 记忆更新用较低 temperature 保证稳定性
-                    base_url=base_url,
-                    api_key=api_key,
-                    streaming=False,  # 记忆更新不需要流式
-                )
-            else:
-                raise ValueError(f"不支持的 provider: {provider}")
+    def _get_summary_llm(self) -> ChatOpenAI:
+        if self._summary_llm is None:
+            cfg = settings.llm.get("summary_llm", {}) if hasattr(settings, "llm") else {}
+            self._summary_llm = self._build_llm_from_cfg(cfg, default_temperature=0.2)
+        return self._summary_llm
 
-        return self._llm
+    def _get_profile_llm(self) -> ChatOpenAI:
+        if self._profile_llm is None:
+            cfg = settings.llm.get("profile_llm", {}) if hasattr(settings, "llm") else {}
+            self._profile_llm = self._build_llm_from_cfg(cfg, default_temperature=0.2)
+        return self._profile_llm
+
 
     def _format_recent_messages(self) -> str:
         """将最近 update_interval*2 条消息格式化为文本。"""
@@ -178,9 +214,10 @@ class MemoryManager:
 
 直接输出更新后的摘要文本，不需要额外说明。"""
 
-        llm = self._get_llm()
+        llm = self._get_summary_llm()
         result = llm.invoke(prompt)
         new_summary = result.content.strip()
+
 
         if new_summary:
             self._summary = new_summary
@@ -225,9 +262,10 @@ class MemoryManager:
   "investment_horizon": "long-term"
 }}"""
 
-        llm = self._get_llm()
+        llm = self._get_profile_llm()
         result = llm.invoke(prompt)
         raw = result.content.strip()
+
 
         # 提取 JSON（兼容 LLM 可能输出 markdown 代码块的情况）
         new_profile = self._parse_json_from_llm(raw, old_profile)

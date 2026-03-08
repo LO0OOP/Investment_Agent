@@ -8,3 +8,17 @@ llm:
   # 可选：显式配置 base_url；也可以通过环境变量 BAILIAN_BASE_URL / OPENAI_API_BASE 提供
   base_url: ${BAILIAN_BASE_URL}
 
+  # 摘要记忆可用的轻量模型（可选，未配置则退回 llm 默认模型）
+  summary_llm:
+    model: qwen3.5-flash
+    temperature: 0.2
+    streaming: false
+
+  # 用户画像可用的轻量模型（可选，未配置则退回 llm 默认模型）
+  profile_llm:
+    model: qwen3.5-flash
+    temperature: 0.2
+    streaming: false
+
+
+
