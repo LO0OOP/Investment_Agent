@@ -129,6 +129,20 @@ Tool 层（src/tools）
   - 其他策略 / 回测相关 Tool：
     - 用于查询策略信息或触发回测流程，作为完整 Agent 能力的一部分样例。
 
+### 长期记忆（摘要 & 用户画像）
+
+- **位置与作用**：
+  - 位于 `src/agents/memory` 包中，提供 `MemoryManager` 统一管理长期记忆。
+  - 当前实现两类长期记忆：Summary Memory（摘要记忆）和 User Profile（用户画像）。
+- **存储文件**：
+  - 摘要：`data/memory/summary.txt`
+  - 用户画像：`data/memory/user_profile.json`
+- **更新策略**：
+  - 默认每累计约 10 轮对话（约 20 条消息）触发一次摘要和用户画像更新，以降低 LLM 调用开销。
+- **重置长期记忆**：
+  - 手动删除 `data/memory/summary.txt` 和 `data/memory/user_profile.json` 即可清空长期记忆。
+  - 下次对话时，系统会自动重新创建这些文件。
+
 ### 新闻 Worker（`news_worker`）
 
 - **采集逻辑（`collector.py`）**：

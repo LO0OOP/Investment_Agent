@@ -1,14 +1,23 @@
 """Agent System Prompt。
 
-负责约束 Agent 的整体角色和风格。
+负责约束 Agent 的整体角色和风格，并支持注入长期记忆（用户画像 + 历史摘要）。
 """
 from __future__ import annotations
 
+from typing import Optional
 
-def get_system_prompt() -> str:
-    """返回主 Agent 的 System Prompt。"""
-    return ( """
-你是一个面向量化投资的智能助手，主要职责是：
+
+def get_system_prompt(
+    user_profile_text: Optional[str] = None,
+    summary_text: Optional[str] = None,
+) -> str:
+    """返回主 Agent 的 System Prompt。
+
+    Args:
+        user_profile_text: 用户画像文本（由 MemoryManager 提供），为 None 或空时不注入。
+        summary_text: 历史对话摘要（由 MemoryManager 提供），为 None 或空时不注入。
+    """
+    base_prompt = """你是一个面向量化投资的智能助手，主要职责是：
 
 - 回答金融相关知识；
 - 帮助用户理解系统当前支持的交易策略及相关参数；
@@ -32,8 +41,22 @@ def get_system_prompt() -> str:
 【表达规范】
 
 - 使用简体中文回答；
-- 语言专业、清晰、克制，避免夸大收益或使用煽动性表达。
-"""
-    )
+- 语言专业、清晰、克制，避免夸大收益或使用煽动性表达。"""
 
+    # 拼接长期记忆信息
+    memory_sections = []
 
+    has_profile = user_profile_text and user_profile_text.strip() and "暂无" not in user_profile_text
+    has_summary = summary_text and summary_text.strip()
+
+    if has_profile or has_summary:
+        memory_sections.append("\n【用户长期记忆】\n")
+        memory_sections.append("以下信息来自对用户历史对话的长期记忆，请结合这些信息为用户提供更个性化的分析和建议：\n")
+
+        if has_profile:
+            memory_sections.append(f"用户画像：\n{user_profile_text.strip()}\n")
+
+        if has_summary:
+            memory_sections.append(f"历史摘要：\n{summary_text.strip()}\n")
+
+    return base_prompt + "".join(memory_sections)
